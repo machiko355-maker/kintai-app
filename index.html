@@ -47,6 +47,7 @@ tr.off td{background:var(--off);color:var(--sub)}
 <script>
 // ---------- 状態 ----------
 const KEY='kintai-v1';
+const DEFAULT_DB='https://kintai-3279b-default-rtdb.asia-southeast1.firebasedatabase.app';
 const now=new Date();
 let S=load()||{
   month:now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0'),
@@ -238,7 +239,7 @@ function viewSettings(){
   </div>
   <div class="card"><h2>共有</h2>
     <p class="hint">同じ「データベースURL」と「共有コード」を入力した人どうしで、設定と勤怠表が自動で共有されます（10秒ごとに更新）。</p>
-    <div class="row"><input id="fburl" class="grow" placeholder="https://xxxx-default-rtdb.firebaseio.com" value="${esc(S.sync?S.sync.url:'')}"></div>
+    <div class="row"><input id="fburl" class="grow" placeholder="https://xxxx-default-rtdb.firebaseio.com" value="${esc(S.sync?S.sync.url:DEFAULT_DB)}"></div>
     <div class="row"><input id="fbkey" class="grow" placeholder="Web APIキー（ログイン用）" value="${esc(S.sync&&S.sync.apiKey||'')}"></div>
     <div class="row"><input id="fbcode" class="grow" placeholder="共有コード（例: team2026）" value="${esc(S.sync?S.sync.code:'')}"><button class="b" onclick="saveSync()">${S.sync?'更新':'共有開始'}</button>${S.sync?'<button class="b g" onclick="stopSync()">解除</button>':''}</div>
     ${S.sync&&S.sync.apiKey?(S.auth?`<p>ログイン中：${esc(S.auth.email)} <button class="b g" onclick="logout()">ログアウト</button></p>`:`

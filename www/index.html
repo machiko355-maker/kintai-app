@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#2563eb">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<title>勤怠表ローテーション</title>
+<style>
+:root{--bg:#f4f6fa;--card:#fff;--fg:#1f2937;--sub:#6b7280;--pri:#2563eb;--line:#e5e7eb;--sun:#dc2626;--sat:#2563eb;--off:#f3f4f6}
+@media(prefers-color-scheme:dark){:root{--bg:#111827;--card:#1f2937;--fg:#f3f4f6;--sub:#9ca3af;--line:#374151;--off:#273244;--pri:#60a5fa}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;padding-bottom:70px}
+header{background:var(--pri);color:#fff;padding:14px 16px;font-weight:700;font-size:18px;position:sticky;top:0;z-index:5}
+.tabs{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line);z-index:5;padding-bottom:env(safe-area-inset-bottom)}
+.tabs button{flex:1;padding:14px;border:0;background:none;color:var(--sub);font-size:15px;font-weight:600}
+.tabs button.on{color:var(--pri);border-top:3px solid var(--pri)}
+main{padding:12px 16px;max-width:800px;margin:auto}
+.card{background:var(--card);border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 3px #0001}
+h2{margin:0 0 10px;font-size:16px}
+.row{display:flex;gap:8px;margin-bottom:8px;align-items:center}
+input,select{font:inherit;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);min-width:0}
+input.grow{flex:1}
+input[type=number]{width:70px}
+button.b{font:inherit;padding:10px 14px;border:0;border-radius:8px;background:var(--pri);color:#fff;font-weight:600}
+button.g{background:var(--off);color:var(--fg)}
+button.x{background:none;border:0;color:var(--sub);font-size:20px;padding:4px 10px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{background:var(--off);border-radius:20px;padding:4px 6px 4px 12px;display:flex;align-items:center}
+.hint{color:var(--sub);font-size:13px}
+.warn{color:var(--sun);font-size:14px;margin:6px 0}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{border:1px solid var(--line);padding:6px 4px;text-align:center}
+th{background:var(--off);position:sticky;top:48px}
+td.d{white-space:nowrap;font-weight:600}
+.sun{color:var(--sun)}.sat{color:var(--sat)}
+tr.off td{background:var(--off);color:var(--sub)}
+.wrap{overflow-x:auto}
+.big{width:100%;padding:14px;font-size:17px}
+</style>
+</head>
+<body>
+<header>勤怠表ローテーション</header>
+<main id="app"></main>
+<nav class="tabs"><button id="t0" onclick="tab(0)">設定</button><button id="t1" onclick="tab(1)">勤怠表</button></nav>
+<script>
+// ---------- 状態 ----------
+const KEY='kintai-v1';
+const now=new Date();
+let S=load()||{
+  month:now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0'),
+  members:['Aさん','Bさん','Cさん','Dさん','Eさん','Fさん'],
+  positions:[{name:'受付',count:1},{name:'電話',count:1},{name:'配送',count:2}],
+  extra:[], result:null
+};
+let cur=0;
+function load(){try{return JSON.parse(localStorage.getItem(KEY))}catch(e){return null}}
+function save(remote){
+  if(!remote)S.updatedAt=Date.now();
+  try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}
+  if(!remote)push();
+}
+
+// ---------- 共有（Firebase Realtime Database REST） ----------
+let syncMsg='',pushTimer=null;
+function syncUrl(){
+  const y=S.sync;if(!y||!y.url||!y.code)return null;
+  if(y.apiKey&&!(S.auth&&S.auth.refreshToken))return null;   // ログイン必須
+  return y.url.trim().replace(/\/+$/,'')+'/rooms/'+encodeURIComponent(y.code.trim())+'.json';
+}
+// ログイン（Firebase Authentication REST）
+const AUTH_ERR={EMAIL_EXISTS:'このメールは登録済みです',INVALID_LOGIN_CREDENTIALS:'メールまたはパスワードが違います',EMAIL_NOT_FOUND:'メールまたはパスワードが違います',INVALID_PASSWORD:'メールまたはパスワードが違います',WEAK_PASSWORD:'パスワードは6文字以上にしてください',INVALID_EMAIL:'メールアドレスの形式が正しくありません',OPERATION_NOT_ALLOWED:'Firebaseでメール/パスワード認証が有効になっていません',TOO_MANY_ATTEMPTS_TRY_LATER:'試行回数が多すぎます。しばらくしてからやり直してください'};
+function setAuth(d){S.auth={email:d.email,refreshToken:d.refreshToken,idToken:d.idToken,exp:Date.now()+(+d.expiresIn-60)*1000}}
+async function doAuth(mode){
+  const key=document.getElementById('fbkey').value.trim(),email=document.getElementById('fbmail').value.trim(),pw=document.getElementById('fbpw').value;
+  if(!key||!email||!pw){alert('APIキー・メール・パスワードを入力してください');return}
+  try{
+    const r=await fetch('https://identitytoolkit.googleapis.com/v1/accounts:'+(mode==='up'?'signUp':'signInWithPassword')+'?key='+encodeURIComponent(key),
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password:pw,returnSecureToken:true})});
+    const d=await r.json();
+    if(!r.ok){const c=(d.error&&d.error.message||'').split(' ')[0];throw new Error(AUTH_ERR[c]||c||r.status)}
+    S.sync=Object.assign({},S.sync,{apiKey:key});
+    setAuth(d);save(true);syncMsg='ログインしました';render();pull();
+  }catch(e){alert('ログイン失敗: '+e.message)}
+}
+function logout(){S.auth=null;syncMsg='';save(true);render()}
+async function token(){
+  const a=S.auth;if(!a)return null;
+  if(Date.now()<a.exp)return a.idToken;
+  const r=await fetch('https://securetoken.googleapis.com/v1/token?key='+encodeURIComponent(S.sync.apiKey),
+    {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'grant_type=refresh_token&refresh_token='+encodeURIComponent(a.refreshToken)});
+  const d=await r.json();
+  if(!r.ok){S.auth=null;save(true);throw new Error('再ログインしてください')}
+  S.auth.idToken=d.id_token;S.auth.refreshToken=d.refresh_token;S.auth.exp=Date.now()+(+d.expires_in-60)*1000;save(true);
+  return S.auth.idToken;
+}
+async function url(){
+  const u=syncUrl();if(!u)return null;
+  return S.sync.apiKey?u+'?auth='+encodeURIComponent(await token()):u;
+}
+function shared(){const {month,members,positions,extra,result,updatedAt}=S;return{month,members,positions,extra,result:result||null,updatedAt}}
+function push(){
+  if(!syncUrl())return;
+  clearTimeout(pushTimer);
+  pushTimer=setTimeout(async()=>{
+    try{const r=await fetch(await url(),{method:'PUT',body:JSON.stringify(shared())});
+      if(!r.ok)throw new Error(r.status);syncMsg='共有済み '+new Date().toLocaleTimeString();}
+    catch(e){syncMsg='共有に失敗しました（'+e.message+'）'}
+    showSync();
+  },400);
+}
+async function pull(){
+  if(!syncUrl())return;
+  try{
+    const r=await fetch(await url());if(!r.ok)throw new Error(r.status);
+    const d=await r.json();
+    if(!d){push();return}                       // 新しい共有コード: 自分のデータを登録
+    if((d.updatedAt||0)>(S.updatedAt||0)){
+      S.month=d.month;S.members=d.members||[];S.positions=d.positions||[];S.extra=d.extra||[];S.result=d.result||null;S.updatedAt=d.updatedAt;
+      save(true);syncMsg='最新を受信 '+new Date().toLocaleTimeString();
+      const a=document.activeElement;if(!a||!/INPUT|SELECT/.test(a.tagName))render();
+    }else if((d.updatedAt||0)<(S.updatedAt||0))push();
+    else syncMsg='同期中 '+new Date().toLocaleTimeString();
+  }catch(e){syncMsg='通信できません（'+e.message+'）'}
+  showSync();
+}
+function showSync(){const el=document.getElementById('syncmsg');if(el)el.textContent=syncMsg}
+function saveSync(){
+  S.sync={url:document.getElementById('fburl').value,code:document.getElementById('fbcode').value,apiKey:document.getElementById('fbkey').value.trim()};
+  save(true);render();pull();
+}
+function stopSync(){S.sync=null;S.auth=null;syncMsg='';save(true);render()}
+setInterval(pull,10000);
+
+// ---------- 日付・祝日 ----------
+const pad=n=>String(n).padStart(2,'0');
+const ymd=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const WD=['日','月','火','水','木','金','土'];
+function nthMon(y,m,n){const f=new Date(y,m-1,1).getDay();return 1+((8-f)%7)+(n-1)*7}
+function holidays(y){
+  const h={};const add=(m,d,n)=>h[y+'-'+pad(m)+'-'+pad(d)]=n;
+  add(1,1,'元日');add(1,nthMon(y,1,2),'成人の日');add(2,11,'建国記念の日');add(2,23,'天皇誕生日');
+  add(3,Math.floor(20.8431+0.242194*(y-1980)-Math.floor((y-1980)/4)),'春分の日');
+  add(4,29,'昭和の日');add(5,3,'憲法記念日');add(5,4,'みどりの日');add(5,5,'こどもの日');
+  add(7,nthMon(y,7,3),'海の日');add(8,11,'山の日');add(9,nthMon(y,9,3),'敬老の日');
+  add(9,Math.floor(23.2488+0.242194*(y-1980)-Math.floor((y-1980)/4)),'秋分の日');
+  add(10,nthMon(y,10,2),'スポーツの日');add(11,3,'文化の日');add(11,23,'勤労感謝の日');
+  for(const k of Object.keys(h)){ // 振替休日
+    const d=new Date(k+'T00:00:00');
+    if(d.getDay()===0){do{d.setDate(d.getDate()+1)}while(h[ymd(d)]);h[ymd(d)]='振替休日'}
+  }
+  for(let m=1;m<=12;m++)for(let d=2;d<=30;d++){ // 国民の休日
+    const k=y+'-'+pad(m)+'-'+pad(d),dt=new Date(y,m-1,d);
+    if(!h[k]&&dt.getMonth()===m-1&&dt.getDay()!==0&&h[ymd(new Date(y,m-1,d-1))]&&h[ymd(new Date(y,m-1,d+1))])h[k]='国民の休日';
+  }
+  return h;
+}
+function monthDays(){
+  const [y,m]=S.month.split('-').map(Number),hol=holidays(y),out=[];
+  const n=new Date(y,m,0).getDate();
+  for(let d=1;d<=n;d++){
+    const dt=new Date(y,m-1,d),k=ymd(dt),w=dt.getDay();
+    let off=null;
+    if(w===0||w===6)off=WD[w]+'曜';
+    else if(hol[k])off=hol[k];
+    else if(S.extra.includes(k))off='休み(任意)';
+    out.push({k,d,w,off,hol:!!hol[k]});
+  }
+  return out;
+}
+
+// ---------- ローテーション生成 ----------
+function simulate(days,members,positions){
+  const slots=[];positions.forEach((p,i)=>{for(let c=0;c<p.count;c++)slots.push(i)});
+  const N=Math.min(slots.length,members.length);
+  const tot={},pc={},lp={};
+  members.forEach(m=>{tot[m]=0;pc[m]=positions.map(()=>0)});
+  let last=new Set(),lastKey=null,consec=0;const rows=[];
+  for(const day of days){
+    const prevDay=new Date(day.k+'T00:00:00');prevDay.setDate(prevDay.getDate()-1);
+    const adj=lastKey===ymd(prevDay);
+    const cost=m=>(adj&&last.has(m)?1000:0)+tot[m]*10+Math.random()*5;
+    const pick=members.map(m=>[m,cost(m)]).sort((a,b)=>a[1]-b[1]).slice(0,N).map(x=>x[0]);
+    let pool=[...pick];const asg=positions.map(()=>[]);
+    const order=slots.map((s,i)=>i).sort(()=>Math.random()-.5);
+    for(const si of order){
+      if(!pool.length)break;const pi=slots[si];
+      let bi=0,bc=1e9;
+      pool.forEach((m,i)=>{const c=pc[m][pi]*10+(adj&&lp[m]===pi?50:0)+Math.random()*3;if(c<bc){bc=c;bi=i}});
+      const m=pool.splice(bi,1)[0];asg[pi].push(m);
+    }
+    const work=new Set(pick);
+    if(adj)pick.forEach(m=>{if(last.has(m))consec++});
+    pick.forEach(m=>tot[m]++);
+    asg.forEach((a,pi)=>a.forEach(m=>{pc[m][pi]++;lp[m]=pi}));
+    rows.push({k:day.k,asg,rest:members.filter(m=>!work.has(m))});
+    last=work;lastKey=day.k;
+  }
+  const t=members.map(m=>tot[m]);
+  let imb=0;members.forEach(m=>{imb+=Math.max(...pc[m])-Math.min(...pc[m])});
+  return{rows,consec,tot,pc,score:consec*1000+(Math.max(...t)-Math.min(...t))*50+imb};
+}
+function generate(){
+  const {members,positions}=S;
+  const days=monthDays().filter(d=>!d.off);
+  if(!members.length||!positions.length||!days.length){alert('メンバー・ポジション・出勤日を確認してください');return}
+  let best=null;
+  for(let i=0;i<300;i++){const r=simulate(days,members,positions);if(!best||r.score<best.score)best=r}
+  S.result={month:S.month,members:[...members],positions:positions.map(p=>({...p})),rows:best.rows,consec:best.consec,tot:best.tot,pc:best.pc};
+  save();tab(1);
+}
+
+// ---------- 画面 ----------
+function tab(i){cur=i;t0.className=i?'' :'on';t1.className=i?'on':'';render()}
+function render(){app.innerHTML=cur?viewTable():viewSettings();}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function viewSettings(){
+  const need=S.positions.reduce((a,p)=>a+p.count,0);
+  return `
+  <div class="card"><h2>対象月</h2><input type="month" value="${S.month}" onchange="S.month=this.value;save();render()"></div>
+  <div class="card"><h2>メンバー（${S.members.length}人）</h2>
+    <div class="row"><input id="nm" class="grow" placeholder="名前"><button class="b" onclick="addMember()">追加</button></div>
+    <div class="chips">${S.members.map((m,i)=>`<span class="chip">${esc(m)}<button class="x" onclick="S.members.splice(${i},1);save();render()">×</button></span>`).join('')}</div>
+  </div>
+  <div class="card"><h2>ポジションと人数</h2>
+    ${S.positions.map((p,i)=>`<div class="row"><input class="grow" value="${esc(p.name)}" onchange="S.positions[${i}].name=this.value;save()"><input type="number" min="1" value="${p.count}" onchange="S.positions[${i}].count=Math.max(1,+this.value||1);save();render()"><span>人</span><button class="x" onclick="S.positions.splice(${i},1);save();render()">×</button></div>`).join('')}
+    <button class="b g" onclick="S.positions.push({name:'新ポジション',count:1});save();render()">＋ ポジション追加</button>
+    <p class="hint">1日に必要な人数：${need}人 ／ メンバー：${S.members.length}人</p>
+    ${need>S.members.length?'<p class="warn">メンバーが足りません。空きが出ます。</p>':''}
+    ${need*2>S.members.length&&need<=S.members.length?'<p class="warn">人数的に、連日入る人が出るのは避けられません（最小限に抑えます）。</p>':''}
+  </div>
+  <div class="card"><h2>任意の休日</h2>
+    <p class="hint">土日祝日は自動で休みです。それ以外の休みを追加できます。</p>
+    <div class="row"><input type="date" id="ed" class="grow"><button class="b" onclick="addExtra()">追加</button></div>
+    <div class="chips">${S.extra.slice().sort().map(k=>`<span class="chip">${k.slice(5).replace('-','/')}<button class="x" onclick="S.extra=S.extra.filter(x=>x!=='${k}');save();render()">×</button></span>`).join('')}</div>
+  </div>
+  <div class="card"><h2>共有</h2>
+    <p class="hint">同じ「データベースURL」と「共有コード」を入力した人どうしで、設定と勤怠表が自動で共有されます（10秒ごとに更新）。</p>
+    <div class="row"><input id="fburl" class="grow" placeholder="https://xxxx-default-rtdb.firebaseio.com" value="${esc(S.sync?S.sync.url:'')}"></div>
+    <div class="row"><input id="fbkey" class="grow" placeholder="Web APIキー（ログイン用）" value="${esc(S.sync&&S.sync.apiKey||'')}"></div>
+    <div class="row"><input id="fbcode" class="grow" placeholder="共有コード（例: team2026）" value="${esc(S.sync?S.sync.code:'')}"><button class="b" onclick="saveSync()">${S.sync?'更新':'共有開始'}</button>${S.sync?'<button class="b g" onclick="stopSync()">解除</button>':''}</div>
+    ${S.sync&&S.sync.apiKey?(S.auth?`<p>ログイン中：${esc(S.auth.email)} <button class="b g" onclick="logout()">ログアウト</button></p>`:`
+    <div class="row"><input id="fbmail" class="grow" type="email" placeholder="メールアドレス" autocomplete="username"></div>
+    <div class="row"><input id="fbpw" class="grow" type="password" placeholder="パスワード（6文字以上）" autocomplete="current-password"></div>
+    <div class="row"><button class="b" onclick="doAuth('in')">ログイン</button><button class="b g" onclick="doAuth('up')">新規登録</button></div>`):'<p class="warn">APIキーを入れるとログイン必須になります。</p>'}
+    <p class="hint" id="syncmsg">${esc(syncMsg)}</p>
+  </div>
+  <button class="b big" onclick="generate()">勤怠表を作成</button>`;
+}
+function addMember(){const v=nm.value.trim();if(v&&!S.members.includes(v)){S.members.push(v);save();render()}}
+function addExtra(){if(ed.value&&!S.extra.includes(ed.value)){S.extra.push(ed.value);save();render()}}
+
+function viewTable(){
+  const R=S.result;
+  if(!R)return '<div class="card">まだ作成されていません。「設定」から作成してください。</div>';
+  const info={};monthDays().forEach(d=>info[d.k]=d);
+  const [y,m]=R.month.split('-').map(Number);
+  const hol=holidays(y);
+  const all=[];const n=new Date(y,m,0).getDate();
+  const rowOf={};R.rows.forEach(r=>rowOf[r.k]=r);
+  for(let d=1;d<=n;d++){
+    const dt=new Date(y,m-1,d),k=ymd(dt),w=dt.getDay();
+    let off=null;
+    if(w===0||w===6)off='';else if(hol[k])off=hol[k];else if(!rowOf[k])off='休み';
+    all.push({k,d,w,off});
+  }
+  const head='<tr><th>日</th>'+R.positions.map(p=>`<th>${esc(p.name)}<br><small>${p.count}人</small></th>`).join('')+'<th>休</th></tr>';
+  const body=all.map(r=>{
+    const cls=r.w===0?'sun':r.w===6?'sat':'';
+    const lab=`<td class="d ${cls}">${m}/${r.d}(${WD[r.w]})</td>`;
+    const row=rowOf[r.k];
+    if(!row)return `<tr class="off">${lab}<td colspan="${R.positions.length+1}">${esc(r.off||'')}</td></tr>`;
+    return `<tr>${lab}${row.asg.map(a=>`<td>${a.map(esc).join('<br>')||'—'}</td>`).join('')}<td class="hint">${row.rest.map(esc).join(' ')}</td></tr>`;
+  }).join('');
+  const sum='<tr><th>名前</th><th>出勤</th>'+R.positions.map(p=>`<th>${esc(p.name)}</th>`).join('')+'</tr>'+
+    R.members.map(mm=>`<tr><td>${esc(mm)}</td><td>${R.tot[mm]}</td>${R.pc[mm].map(c=>`<td>${c}</td>`).join('')}</tr>`).join('');
+  return `
+  <div class="card"><h2>${y}年${m}月</h2>
+    <p class="hint">連日勤務：${R.consec}回${R.consec?'（人数の都合で発生）':'（なし）'}</p>
+    <div class="row"><button class="b" onclick="generate()">作り直す</button><button class="b g" onclick="copyText()">コピー</button><button class="b g" onclick="shareCsv()">CSV</button></div>
+  </div>
+  <div class="wrap card"><table>${head}${body}</table></div>
+  <div class="wrap card"><h2>集計</h2><table>${sum}</table></div>`;
+}
+
+function toRows(){
+  const R=S.result,[y,m]=R.month.split('-').map(Number);
+  const out=[['日付',...R.positions.map(p=>p.name),'休み']];
+  R.rows.forEach(r=>{const d=new Date(r.k+'T00:00:00');out.push([`${m}/${d.getDate()}(${WD[d.getDay()]})`,...r.asg.map(a=>a.join('・')),r.rest.join('・')])});
+  return out;
+}
+function copyText(){
+  const t=toRows().map(r=>r.join('\t')).join('\n');
+  (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(()=>alert('コピーしました')).catch(()=>alert('コピーできませんでした'));
+}
+async function shareCsv(){
+  const csv='﻿'+toRows().map(r=>r.map(c=>'"'+c.replace(/"/g,'""')+'"').join(',')).join('\r\n');
+  const name=`勤怠表_${S.result.month}.csv`;
+  const file=new File([csv],name,{type:'text/csv'});
+  try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:name});return}}catch(e){}
+  const a=document.createElement('a');a.href=URL.createObjectURL(file);a.download=name;a.click();
+}
+
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+tab(S.result?1:0);pull();
+</script>
+</body>
+</html>

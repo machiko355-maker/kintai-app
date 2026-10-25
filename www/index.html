@@ -295,7 +295,7 @@ function tab(i){cur=i;[t0,t1,t2].forEach((b,j)=>b.className=j===i?'on':'');rende
 function render(){app.innerHTML=updBanner()+[viewCreate,viewTable,viewShare][cur]();}
 
 // ---------- アップデート確認（GitHub Releases） ----------
-const APP_VERSION='1.2.1',REPO='machiko355-maker/kintai-app';
+const APP_VERSION='1.2.2',REPO='machiko355-maker/kintai-app';
 const MANUAL_URL='https://machiko355-maker.github.io/kintai-app/manual.html';
 let upd=null;
 const verNum=v=>v.replace(/^v/,'').split('.').map(Number);
@@ -397,7 +397,7 @@ function addLeave(){
   if(!dates.length){alert('カレンダーで休暇の日を選んでください');return}
   S.leaves=S.leaves||[];
   names.forEach(m=>dates.forEach(k=>{if(!S.leaves.some(l=>l.m===m&&k>=l.from&&k<=l.to))S.leaves.push({m,from:k,to:k})}));
-  lvSel.clear();save();render();toast(`${names.length}人 × ${dates.length}日の休暇を登録しました`);
+  lvSel.clear();lvMem.clear();save();render();toast(`${names.length}人 × ${dates.length}日の休暇を登録しました`);
 }
 // 一覧表示用に、連続する休暇（間が休みの日だけの場合も含む）をまとめる
 function nextDay(k){const d=new Date(k+'T00:00:00');d.setDate(d.getDate()+1);return ymd(d)}

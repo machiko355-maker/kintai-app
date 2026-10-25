@@ -6,6 +6,11 @@
 <meta name="theme-color" content="#2563eb">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="勤怠表">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>勤怠表ローテーション</title>
 <style>
 :root{--bg:#f4f6fa;--card:#fff;--fg:#1f2937;--sub:#6b7280;--pri:#2563eb;--line:#e5e7eb;--sun:#dc2626;--sat:#2563eb;--off:#f3f4f6}
@@ -281,7 +286,8 @@ function tab(i){cur=i;t0.className=i?'' :'on';t1.className=i?'on':'';render()}
 function render(){app.innerHTML=updBanner()+(cur?viewTable():viewSettings());}
 
 // ---------- アップデート確認（GitHub Releases） ----------
-const APP_VERSION='1.1.0',REPO='machiko355-maker/kintai-app';
+const APP_VERSION='1.1.1',REPO='machiko355-maker/kintai-app';
+const MANUAL_URL='https://machiko355-maker.github.io/kintai-app/manual.html';
 let upd=null;
 const verNum=v=>v.replace(/^v/,'').split('.').map(Number);
 function newer(a,b){const x=verNum(a),y=verNum(b);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return(x[i]||0)>(y[i]||0)}return false}
@@ -336,7 +342,8 @@ function viewSettings(){
     <div class="row"><button class="b" onclick="doAuth('in')">ログイン</button><button class="b g" onclick="doAuth('up')">新規登録</button></div>`):'<p class="warn">APIキーを入れるとログイン必須になります。</p>'}
     <p class="hint" id="syncmsg">${esc(syncMsg)}</p>
   </div>
-  <button class="b big" onclick="generate()">勤怠表を作成</button>`;
+  <button class="b big" onclick="generate()">勤怠表を作成</button>
+  <p class="hint" style="text-align:center;margin-top:16px"><a href="${MANUAL_URL}" target="_blank" rel="noopener">取扱説明書</a> ／ バージョン ${APP_VERSION}</p>`;
 }
 function addMember(){const v=nm.value.trim();if(v&&!S.members.includes(v)){S.members.push(v);save();render()}}
 function delMember(i){const n=S.members.splice(i,1)[0];S.leaves=(S.leaves||[]).filter(l=>l.m!==n);save();render()}

@@ -50,11 +50,11 @@ th{background:var(--off)}
 #toast{display:none;position:fixed;left:16px;right:16px;bottom:80px;background:#111827e6;color:#fff;padding:12px 16px;border-radius:10px;z-index:20;text-align:center}
 .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;text-align:center}
 .cal .wd{font-size:13px;color:var(--sub)}
-.cal .day{font:inherit;height:42px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);padding:0;position:relative}
+.cal .day{font:inherit;height:52px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);padding:2px 0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.2;overflow:hidden}
 .cal .day.off{opacity:.4}
 .cal .day.sel{background:var(--pri);color:#fff;border-color:var(--pri);font-weight:700}
-.cal .day.has::after{content:'';position:absolute;bottom:4px;left:50%;margin-left:-3px;width:6px;height:6px;border-radius:50%;background:var(--pri)}
-.cal .day.sel.has::after{background:#fff}
+.cal .day .ini{font-size:11px;min-height:13px;color:var(--pri);font-weight:700;max-width:100%;white-space:nowrap}
+.cal .day.sel .ini{color:#fff}
 td.d{white-space:nowrap;font-weight:600}
 .sun{color:var(--sun)}.sat{color:var(--sat)}
 tr.off td{background:var(--off);color:var(--sub)}
@@ -295,7 +295,7 @@ function tab(i){cur=i;[t0,t1,t2].forEach((b,j)=>b.className=j===i?'on':'');rende
 function render(){app.innerHTML=updBanner()+[viewCreate,viewTable,viewShare][cur]();}
 
 // ---------- アップデート確認（GitHub Releases） ----------
-const APP_VERSION='1.2.2',REPO='machiko355-maker/kintai-app';
+const APP_VERSION='1.2.3',REPO='machiko355-maker/kintai-app';
 const MANUAL_URL='https://machiko355-maker.github.io/kintai-app/manual.html';
 let upd=null;
 const verNum=v=>v.replace(/^v/,'').split('.').map(Number);
@@ -376,12 +376,13 @@ function lvCalHtml(){
   let cells=WD.map((w,i)=>`<span class="wd ${i===0?'sun':i===6?'sat':''}">${w}</span>`).join('');
   for(let i=0;i<first;i++)cells+='<span></span>';
   for(let d=1;d<=n;d++){
-    const k=y+'-'+pad(m)+'-'+pad(d),off=isOff(k),has=(S.leaves||[]).some(l=>k>=l.from&&k<=l.to);
-    cells+=`<button class="day${off?' off':''}${lvSel.has(k)?' sel':''}${has?' has':''}" ${off?'disabled':''} onclick="toggleLv('${k}')">${d}</button>`;
+    const k=y+'-'+pad(m)+'-'+pad(d),off=isOff(k);
+    const ini=S.members.filter(mm=>(S.leaves||[]).some(l=>l.m===mm&&k>=l.from&&k<=l.to)).map(mm=>[...mm][0]).join('');
+    cells+=`<button class="day${off?' off':''}${lvSel.has(k)?' sel':''}" ${off?'disabled':''} onclick="toggleLv('${k}')"><span>${d}</span><small class="ini">${esc(ini)}</small></button>`;
   }
   return `<div class="mnav" style="margin:10px 0 6px"><button class="b g" onclick="lvShift(-1)">◀</button><b>${y}年${m}月</b><button class="b g" onclick="lvShift(1)">▶</button></div>
   <div class="cal">${cells}</div>
-  <p class="hint">選択中：${lvSel.size}日 ／ メンバー：${lvMem.size}人　<span style="color:var(--pri)">●</span>は休暇が登録済みの日　<a href="#" onclick="lvSel.clear();refreshCal();return false">日付をクリア</a></p>`;
+  <p class="hint">選択中：${lvSel.size}日 ／ メンバー：${lvMem.size}人　日付の下の文字は、休暇を取るメンバーの頭文字<a href="#" onclick="lvSel.clear();refreshCal();return false">日付をクリア</a></p>`;
 }
 function refreshCal(){const el=document.getElementById('lvcal');if(el)el.innerHTML=lvCalHtml()}
 function toggleLv(k){lvSel.has(k)?lvSel.delete(k):lvSel.add(k);refreshCal()}

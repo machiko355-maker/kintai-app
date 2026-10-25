@@ -101,7 +101,15 @@ async function url(){
   const u=syncUrl();if(!u)return null;
   return S.sync.apiKey?u+'?auth='+encodeURIComponent(await token()):u;
 }
-function shared(){const {month,members,positions,extra,result,updatedAt}=S;return{month,members,positions,extra,result:result||null,updatedAt}}
+function shared(){const {month,members,positions,extra,leaves,result,updatedAt}=S;return{month,members,positions,extra,leaves:leaves||[],result:result||null,updatedAt}}
+// Firebaseは空配列を保存しないため、受信時に形を整える
+const toArr=x=>x?Object.values(x):[];
+function fixResult(R){
+  if(!R)return null;
+  R.members=toArr(R.members);R.positions=toArr(R.positions);
+  R.rows=toArr(R.rows).map(r=>({k:r.k,asg:R.positions.map((_,i)=>toArr(r.asg&&r.asg[i])),rest:toArr(r.rest),lv:toArr(r.lv)}));
+  return R;
+}
 function push(){
   if(!syncUrl())return;
   clearTimeout(pushTimer);
@@ -119,7 +127,7 @@ async function pull(){
     const d=await r.json();
     if(!d){push();return}                       // 新しい共有コード: 自分のデータを登録
     if((d.updatedAt||0)>(S.updatedAt||0)){
-      S.month=d.month;S.members=d.members||[];S.positions=d.positions||[];S.extra=d.extra||[];S.result=d.result||null;S.updatedAt=d.updatedAt;
+      S.month=d.month;S.members=d.members||[];S.positions=d.positions||[];S.extra=toArr(d.extra);S.leaves=toArr(d.leaves);S.members=toArr(d.members);S.positions=toArr(d.positions);S.result=fixResult(d.result);S.updatedAt=d.updatedAt;
       save(true);syncMsg='最新を受信 '+new Date().toLocaleTimeString();
       const a=document.activeElement;if(!a||!/INPUT|SELECT/.test(a.tagName))render();
     }else if((d.updatedAt||0)<(S.updatedAt||0))push();
@@ -173,9 +181,8 @@ function monthDays(){
 }
 
 // ---------- ローテーション生成 ----------
-function simulate(days,members,positions){
+function simulate(days,members,positions,leaves){
   const slots=[];positions.forEach((p,i)=>{for(let c=0;c<p.count;c++)slots.push(i)});
-  const N=Math.min(slots.length,members.length);
   const tot={},pc={},lp={};
   members.forEach(m=>{tot[m]=0;pc[m]=positions.map(()=>0)});
   let last=new Set(),lastKey=null,consec=0;const rows=[];
@@ -183,7 +190,10 @@ function simulate(days,members,positions){
     const prevDay=new Date(day.k+'T00:00:00');prevDay.setDate(prevDay.getDate()-1);
     const adj=lastKey===ymd(prevDay);
     const cost=m=>(adj&&last.has(m)?1000:0)+tot[m]*10+Math.random()*5;
-    const pick=members.map(m=>[m,cost(m)]).sort((a,b)=>a[1]-b[1]).slice(0,N).map(x=>x[0]);
+    const lv=members.filter(m=>leaves.some(l=>l.m===m&&l.k===day.k));
+    const avail=members.filter(m=>!lv.includes(m));
+    const N=Math.min(slots.length,avail.length);
+    const pick=avail.map(m=>[m,cost(m)]).sort((a,b)=>a[1]-b[1]).slice(0,N).map(x=>x[0]);
     let pool=[...pick];const asg=positions.map(()=>[]);
     const order=slots.map((s,i)=>i).sort(()=>Math.random()-.5);
     for(const si of order){
@@ -196,7 +206,7 @@ function simulate(days,members,positions){
     if(adj)pick.forEach(m=>{if(last.has(m))consec++});
     pick.forEach(m=>tot[m]++);
     asg.forEach((a,pi)=>a.forEach(m=>{pc[m][pi]++;lp[m]=pi}));
-    rows.push({k:day.k,asg,rest:members.filter(m=>!work.has(m))});
+    rows.push({k:day.k,asg,rest:avail.filter(m=>!work.has(m)),lv});
     last=work;lastKey=day.k;
   }
   const t=members.map(m=>tot[m]);
@@ -208,14 +218,32 @@ function generate(){
   const days=monthDays().filter(d=>!d.off);
   if(!members.length||!positions.length||!days.length){alert('メンバー・ポジション・出勤日を確認してください');return}
   let best=null;
-  for(let i=0;i<300;i++){const r=simulate(days,members,positions);if(!best||r.score<best.score)best=r}
-  S.result={month:S.month,members:[...members],positions:positions.map(p=>({...p})),rows:best.rows,consec:best.consec,tot:best.tot,pc:best.pc};
+  for(let i=0;i<300;i++){const r=simulate(days,members,positions,S.leaves||[]);if(!best||r.score<best.score)best=r}
+  S.result={month:S.month,members:[...members],positions:positions.map(p=>({...p})),rows:best.rows,consec:best.consec};
   save();tab(1);
 }
 
 // ---------- 画面 ----------
 function tab(i){cur=i;t0.className=i?'' :'on';t1.className=i?'on':'';render()}
-function render(){app.innerHTML=cur?viewTable():viewSettings();}
+function render(){app.innerHTML=updBanner()+(cur?viewTable():viewSettings());}
+
+// ---------- アップデート確認（GitHub Releases） ----------
+const APP_VERSION='1.0.3',REPO='machiko355-maker/kintai-app';
+let upd=null;
+const verNum=v=>v.replace(/^v/,'').split('.').map(Number);
+function newer(a,b){const x=verNum(a),y=verNum(b);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return(x[i]||0)>(y[i]||0)}return false}
+async function checkUpdate(){
+  try{
+    const r=await fetch('https://api.github.com/repos/'+REPO+'/releases/latest');if(!r.ok)return;
+    const d=await r.json(),a=(d.assets||[]).find(x=>/\.apk$/i.test(x.name));
+    if(a&&newer(d.tag_name,APP_VERSION)){upd={ver:d.tag_name,url:a.browser_download_url};render()}
+  }catch(e){}
+}
+function updBanner(){
+  return upd?`<div class="card" style="background:#fef3c7;color:#92400e"><b>新しいバージョン ${esc(upd.ver)} があります</b>
+  <p class="hint" style="color:inherit">ダウンロード後、ファイルを開いてインストールすると更新されます（データは残ります）。</p>
+  <a class="b" style="display:inline-block;text-decoration:none" href="${esc(upd.url)}">更新する</a></div>`:'';
+}
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 function viewSettings(){
@@ -224,7 +252,7 @@ function viewSettings(){
   <div class="card"><h2>対象月</h2><input type="month" value="${S.month}" onchange="S.month=this.value;save();render()"></div>
   <div class="card"><h2>メンバー（${S.members.length}人）</h2>
     <div class="row"><input id="nm" class="grow" placeholder="名前"><button class="b" onclick="addMember()">追加</button></div>
-    <div class="chips">${S.members.map((m,i)=>`<span class="chip">${esc(m)}<button class="x" onclick="S.members.splice(${i},1);save();render()">×</button></span>`).join('')}</div>
+    <div class="chips">${S.members.map((m,i)=>`<span class="chip">${esc(m)}<button class="x" onclick="delMember(${i})">×</button></span>`).join('')}</div>
   </div>
   <div class="card"><h2>ポジションと人数</h2>
     ${S.positions.map((p,i)=>`<div class="row"><input class="grow" value="${esc(p.name)}" onchange="S.positions[${i}].name=this.value;save()"><input type="number" min="1" value="${p.count}" onchange="S.positions[${i}].count=Math.max(1,+this.value||1);save();render()"><span>人</span><button class="x" onclick="S.positions.splice(${i},1);save();render()">×</button></div>`).join('')}
@@ -237,6 +265,11 @@ function viewSettings(){
     <p class="hint">土日祝日は自動で休みです。それ以外の休みを追加できます。</p>
     <div class="row"><input type="date" id="ed" class="grow"><button class="b" onclick="addExtra()">追加</button></div>
     <div class="chips">${S.extra.slice().sort().map(k=>`<span class="chip">${k.slice(5).replace('-','/')}<button class="x" onclick="S.extra=S.extra.filter(x=>x!=='${k}');save();render()">×</button></span>`).join('')}</div>
+  </div>
+  <div class="card"><h2>有休</h2>
+    <p class="hint">有休の日は、その人をローテーションに入れません。</p>
+    <div class="row"><select id="lvm" class="grow">${S.members.map(m=>`<option>${esc(m)}</option>`).join('')}</select><input type="date" id="lvd"><button class="b" onclick="addLeave()">追加</button></div>
+    <div class="chips">${(S.leaves||[]).map((l,i)=>({...l,i})).sort((a,b)=>a.k<b.k?-1:1).map(l=>`<span class="chip">${esc(l.m)} ${l.k.slice(5).replace('-','/')}<button class="x" onclick="S.leaves.splice(${l.i},1);save();render()">×</button></span>`).join('')}</div>
   </div>
   <div class="card"><h2>共有</h2>
     <p class="hint">同じ「データベースURL」と「共有コード」を入力した人どうしで、設定と勤怠表が自動で共有されます（10秒ごとに更新）。</p>
@@ -252,6 +285,12 @@ function viewSettings(){
   <button class="b big" onclick="generate()">勤怠表を作成</button>`;
 }
 function addMember(){const v=nm.value.trim();if(v&&!S.members.includes(v)){S.members.push(v);save();render()}}
+function delMember(i){const n=S.members.splice(i,1)[0];S.leaves=(S.leaves||[]).filter(l=>l.m!==n);save();render()}
+function addLeave(){
+  const m=lvm.value,k=lvd.value;if(!m||!k)return;
+  S.leaves=S.leaves||[];
+  if(!S.leaves.some(l=>l.m===m&&l.k===k)){S.leaves.push({m,k});save();render()}
+}
 function addExtra(){if(ed.value&&!S.extra.includes(ed.value)){S.extra.push(ed.value);save();render()}}
 
 function viewTable(){
@@ -274,10 +313,12 @@ function viewTable(){
     const lab=`<td class="d ${cls}">${m}/${r.d}(${WD[r.w]})</td>`;
     const row=rowOf[r.k];
     if(!row)return `<tr class="off">${lab}<td colspan="${R.positions.length+1}">${esc(r.off||'')}</td></tr>`;
-    return `<tr>${lab}${row.asg.map(a=>`<td>${a.map(esc).join('<br>')||'—'}</td>`).join('')}<td class="hint">${row.rest.map(esc).join(' ')}</td></tr>`;
+    return `<tr>${lab}${row.asg.map(a=>`<td>${a.map(esc).join('<br>')||'—'}</td>`).join('')}<td class="hint">${row.rest.map(esc).join(' ')}${row.lv.map(m=>` <b>${esc(m)}(有休)</b>`).join('')}</td></tr>`;
   }).join('');
-  const sum='<tr><th>名前</th><th>出勤</th>'+R.positions.map(p=>`<th>${esc(p.name)}</th>`).join('')+'</tr>'+
-    R.members.map(mm=>`<tr><td>${esc(mm)}</td><td>${R.tot[mm]}</td>${R.pc[mm].map(c=>`<td>${c}</td>`).join('')}</tr>`).join('');
+  const stat=mm=>{const pc=R.positions.map(()=>0);let tot=0,lv=0;
+    R.rows.forEach(r=>{r.asg.forEach((a,i)=>{if(a.includes(mm)){pc[i]++;tot++}});if(r.lv.includes(mm))lv++});return{pc,tot,lv}};
+  const sum='<tr><th>名前</th><th>出勤</th>'+R.positions.map(p=>`<th>${esc(p.name)}</th>`).join('')+'<th>有休</th></tr>'+
+    R.members.map(mm=>{const s=stat(mm);return `<tr><td>${esc(mm)}</td><td>${s.tot}</td>${s.pc.map(c=>`<td>${c}</td>`).join('')}<td>${s.lv}</td></tr>`}).join('');
   return `
   <div class="card"><h2>${y}年${m}月</h2>
     <p class="hint">連日勤務：${R.consec}回${R.consec?'（人数の都合で発生）':'（なし）'}</p>
@@ -290,7 +331,7 @@ function viewTable(){
 function toRows(){
   const R=S.result,[y,m]=R.month.split('-').map(Number);
   const out=[['日付',...R.positions.map(p=>p.name),'休み']];
-  R.rows.forEach(r=>{const d=new Date(r.k+'T00:00:00');out.push([`${m}/${d.getDate()}(${WD[d.getDay()]})`,...r.asg.map(a=>a.join('・')),r.rest.join('・')])});
+  R.rows.forEach(r=>{const d=new Date(r.k+'T00:00:00');out.push([`${m}/${d.getDate()}(${WD[d.getDay()]})`,...r.asg.map(a=>a.join('・')),r.rest.concat(r.lv.map(x=>x+'(有休)')).join('・')])});
   return out;
 }
 function copyText(){
@@ -306,7 +347,7 @@ async function shareCsv(){
 }
 
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
-tab(S.result?1:0);pull();
+tab(S.result?1:0);pull();checkUpdate();
 </script>
 </body>
 </html>

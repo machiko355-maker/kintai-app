@@ -233,6 +233,7 @@ let upd=null;
 const verNum=v=>v.replace(/^v/,'').split('.').map(Number);
 function newer(a,b){const x=verNum(a),y=verNum(b);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return(x[i]||0)>(y[i]||0)}return false}
 async function checkUpdate(){
+  if(!window.Capacitor)return;   // ブラウザ版は常に最新なので不要
   try{
     const r=await fetch('https://api.github.com/repos/'+REPO+'/releases/latest');if(!r.ok)return;
     const d=await r.json(),a=(d.assets||[]).find(x=>/\.apk$/i.test(x.name));

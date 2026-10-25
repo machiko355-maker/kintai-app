@@ -48,6 +48,13 @@ th{background:var(--off)}
 .tbl th,.tbl td{border-width:0 1px 1px 0}
 .mnav{display:flex;justify-content:space-between;align-items:center}
 #toast{display:none;position:fixed;left:16px;right:16px;bottom:80px;background:#111827e6;color:#fff;padding:12px 16px;border-radius:10px;z-index:20;text-align:center}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;text-align:center}
+.cal .wd{font-size:13px;color:var(--sub)}
+.cal .day{font:inherit;height:42px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);padding:0;position:relative}
+.cal .day.off{opacity:.4}
+.cal .day.sel{background:var(--pri);color:#fff;border-color:var(--pri);font-weight:700}
+.cal .day.has::after{content:'';position:absolute;bottom:4px;left:50%;margin-left:-3px;width:6px;height:6px;border-radius:50%;background:var(--pri)}
+.cal .day.sel.has::after{background:#fff}
 td.d{white-space:nowrap;font-weight:600}
 .sun{color:var(--sun)}.sat{color:var(--sat)}
 tr.off td{background:var(--off);color:var(--sub)}
@@ -288,7 +295,7 @@ function tab(i){cur=i;[t0,t1,t2].forEach((b,j)=>b.className=j===i?'on':'');rende
 function render(){app.innerHTML=updBanner()+[viewCreate,viewTable,viewShare][cur]();}
 
 // ---------- アップデート確認（GitHub Releases） ----------
-const APP_VERSION='1.2.0',REPO='machiko355-maker/kintai-app';
+const APP_VERSION='1.2.1',REPO='machiko355-maker/kintai-app';
 const MANUAL_URL='https://machiko355-maker.github.io/kintai-app/manual.html';
 let upd=null;
 const verNum=v=>v.replace(/^v/,'').split('.').map(Number);
@@ -329,13 +336,12 @@ function viewCreate(){
     <div class="chips">${S.extra.slice().sort().map(k=>`<span class="chip">${k.slice(5).replace('-','/')}<button class="x" onclick="S.extra=S.extra.filter(x=>x!=='${k}');save();render()">×</button></span>`).join('')}</div>
   </div>
   <div class="card"><h2>休暇</h2>
-    <p class="hint">メンバーと期間を選んで、まとめて登録できます。休暇の日は、その人をローテーションに入れません。</p>
-    <div class="chips">${S.members.map((m,i)=>`<label class="chip" style="padding:6px 12px"><input type="checkbox" class="lvc" value="${i}">${esc(m)}</label>`).join('')}</div>
+    <p class="hint">①メンバーを選び、②カレンダーで休暇の日をタップ（複数選択できます）、③「追加」を押します。休暇の日は、その人をローテーションに入れません。</p>
+    <div class="chips">${S.members.map((m,i)=>`<label class="chip" style="padding:6px 12px"><input type="checkbox" class="lvc" value="${i}" ${lvMem.has(i)?'checked':''} onchange="toggleMem(${i},this.checked)">${esc(m)}</label>`).join('')}</div>
     <div class="row" style="margin-top:8px"><button class="b g" onclick="selAll(true)">全員選択</button><button class="b g" onclick="selAll(false)">選択解除</button></div>
-    <div class="row"><input type="date" id="lvf" class="grow"><span>〜</span><input type="date" id="lvt" class="grow"></div>
-    <p class="hint">1日だけの場合は、終了日を空のままにします。土日祝日などの休みの日は、自動で対象外になります。</p>
-    <button class="b" onclick="addLeave()">まとめて追加</button>
-    <div class="chips" style="margin-top:10px">${(S.leaves||[]).map((l,i)=>({...l,i})).sort((a,b)=>a.from<b.from?-1:1).map(l=>`<span class="chip">${esc(l.m)} ${md(l.from)}${l.to!==l.from?'〜'+md(l.to):''}<button class="x" onclick="S.leaves.splice(${l.i},1);save();render()">×</button></span>`).join('')}</div>
+    <div id="lvcal">${lvCalHtml()}</div>
+    <button class="b" onclick="addLeave()">選択した日を追加</button>
+    <div class="chips" style="margin-top:10px">${leaveGroups().map((g,i)=>`<span class="chip">${esc(g.m)} ${md(g.from)}${g.to!==g.from?'〜'+md(g.to):''}<button class="x" onclick="delGroup(${i})">×</button></span>`).join('')}</div>
   </div>
   <button class="b big" onclick="generate()">勤怠表を作成</button>`;
 }
@@ -357,16 +363,64 @@ function viewShare(){
 function addMember(){const v=nm.value.trim();if(v&&!S.members.includes(v)){S.members.push(v);save();render()}}
 function delMember(i){const n=S.members.splice(i,1)[0];S.leaves=(S.leaves||[]).filter(l=>l.m!==n);save();render()}
 const md=k=>+k.slice(5,7)+'/'+ +k.slice(8,10);
-function selAll(v){document.querySelectorAll('.lvc').forEach(c=>c.checked=v)}
+// ---- 休暇カレンダー ----
+let lvSel=new Set(),lvMem=new Set(),lvCal=null;
+const holCache={};
+function isOff(k){
+  const y=+k.slice(0,4),w=new Date(k+'T00:00:00').getDay();
+  return w===0||w===6||!!(holCache[y]||(holCache[y]=holidays(y)))[k]||S.extra.includes(k);
+}
+function lvCalHtml(){
+  const cal=lvCal||S.month,[y,m]=cal.split('-').map(Number);
+  const first=new Date(y,m-1,1).getDay(),n=new Date(y,m,0).getDate();
+  let cells=WD.map((w,i)=>`<span class="wd ${i===0?'sun':i===6?'sat':''}">${w}</span>`).join('');
+  for(let i=0;i<first;i++)cells+='<span></span>';
+  for(let d=1;d<=n;d++){
+    const k=y+'-'+pad(m)+'-'+pad(d),off=isOff(k),has=(S.leaves||[]).some(l=>k>=l.from&&k<=l.to);
+    cells+=`<button class="day${off?' off':''}${lvSel.has(k)?' sel':''}${has?' has':''}" ${off?'disabled':''} onclick="toggleLv('${k}')">${d}</button>`;
+  }
+  return `<div class="mnav" style="margin:10px 0 6px"><button class="b g" onclick="lvShift(-1)">◀</button><b>${y}年${m}月</b><button class="b g" onclick="lvShift(1)">▶</button></div>
+  <div class="cal">${cells}</div>
+  <p class="hint">選択中：${lvSel.size}日 ／ メンバー：${lvMem.size}人　<span style="color:var(--pri)">●</span>は休暇が登録済みの日　<a href="#" onclick="lvSel.clear();refreshCal();return false">日付をクリア</a></p>`;
+}
+function refreshCal(){const el=document.getElementById('lvcal');if(el)el.innerHTML=lvCalHtml()}
+function toggleLv(k){lvSel.has(k)?lvSel.delete(k):lvSel.add(k);refreshCal()}
+function toggleMem(i,on){on?lvMem.add(i):lvMem.delete(i);refreshCal()}
+function lvShift(d){
+  const [y,m]=(lvCal||S.month).split('-').map(Number),dt=new Date(y,m-1+d,1);
+  lvCal=dt.getFullYear()+'-'+pad(dt.getMonth()+1);refreshCal();
+}
+function selAll(v){lvMem=new Set(v?S.members.map((_,i)=>i):[]);document.querySelectorAll('.lvc').forEach(c=>c.checked=v);refreshCal()}
 function addLeave(){
-  const names=[...document.querySelectorAll('.lvc:checked')].map(c=>S.members[+c.value]);
-  const from=lvf.value,to=lvt.value||from;
+  const names=[...lvMem].map(i=>S.members[i]).filter(Boolean),dates=[...lvSel].sort();
   if(!names.length){alert('メンバーを選んでください');return}
-  if(!from){alert('開始日を選んでください');return}
-  if(to<from){alert('終了日は開始日以降にしてください');return}
+  if(!dates.length){alert('カレンダーで休暇の日を選んでください');return}
   S.leaves=S.leaves||[];
-  names.forEach(m=>{if(!S.leaves.some(l=>l.m===m&&l.from===from&&l.to===to))S.leaves.push({m,from,to})});
-  save();render();toast(`${names.length}人の休暇を登録しました`);
+  names.forEach(m=>dates.forEach(k=>{if(!S.leaves.some(l=>l.m===m&&k>=l.from&&k<=l.to))S.leaves.push({m,from:k,to:k})}));
+  lvSel.clear();save();render();toast(`${names.length}人 × ${dates.length}日の休暇を登録しました`);
+}
+// 一覧表示用に、連続する休暇（間が休みの日だけの場合も含む）をまとめる
+function nextDay(k){const d=new Date(k+'T00:00:00');d.setDate(d.getDate()+1);return ymd(d)}
+function leaveGroups(){
+  const out=[];
+  S.members.forEach(m=>{
+    const ls=(S.leaves||[]).filter(l=>l.m===m).sort((a,b)=>a.from<b.from?-1:1);
+    let cur=null;
+    ls.forEach(l=>{
+      if(cur){let k=nextDay(cur.to),bridge=true;
+        while(k<l.from){if(!isOff(k)){bridge=false;break}k=nextDay(k)}
+        if(bridge){if(l.to>cur.to)cur.to=l.to;return}
+        out.push(cur)}
+      cur={m,from:l.from,to:l.to};
+    });
+    if(cur)out.push(cur);
+  });
+  return out.sort((a,b)=>a.from<b.from?-1:a.from>b.from?1:0);
+}
+function delGroup(i){
+  const g=leaveGroups()[i];if(!g)return;
+  S.leaves=S.leaves.filter(l=>!(l.m===g.m&&l.from>=g.from&&l.to<=g.to));
+  save();render();
 }
 // 旧形式（1日ごと）の休暇を期間形式に変換
 const normLeaves=a=>toArr(a).map(l=>l.from?l:{m:l.m,from:l.k,to:l.k});

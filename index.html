@@ -32,7 +32,16 @@ button.x{background:none;border:0;color:var(--sub);font-size:20px;padding:4px 10
 .warn{color:var(--sun);font-size:14px;margin:6px 0}
 table{border-collapse:collapse;width:100%;font-size:14px}
 th,td{border:1px solid var(--line);padding:6px 4px;text-align:center}
-th{background:var(--off);position:sticky;top:48px}
+th{background:var(--off)}
+.tbl{max-height:calc(100vh - 210px);overflow:auto;padding:0}
+.tbl th{position:sticky;top:0;z-index:3}
+.tbl th:first-child,.tbl td.d{position:sticky;left:0;z-index:2;background:var(--card)}
+.tbl th:first-child{z-index:4;background:var(--off)}
+.tbl tr.off td.d{background:var(--off)}
+.tbl table{border-collapse:separate;border-spacing:0}
+.tbl th,.tbl td{border-width:0 1px 1px 0}
+.mnav{display:flex;justify-content:space-between;align-items:center}
+#toast{display:none;position:fixed;left:16px;right:16px;bottom:80px;background:#111827e6;color:#fff;padding:12px 16px;border-radius:10px;z-index:20;text-align:center}
 td.d{white-space:nowrap;font-weight:600}
 .sun{color:var(--sun)}.sat{color:var(--sat)}
 tr.off td{background:var(--off);color:var(--sub)}
@@ -43,6 +52,7 @@ tr.off td{background:var(--off);color:var(--sub)}
 <body>
 <header>勤怠表ローテーション</header>
 <main id="app"></main>
+<div id="toast"></div>
 <nav class="tabs"><button id="t0" onclick="tab(0)">設定</button><button id="t1" onclick="tab(1)">勤怠表</button></nav>
 <script>
 // ---------- 状態 ----------
@@ -54,8 +64,11 @@ let S=load()||{
   month:now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0'),
   members:['Aさん','Bさん','Cさん','Dさん','Eさん','Fさん'],
   positions:[{name:'受付',count:1},{name:'電話',count:1},{name:'配送',count:2}],
-  extra:[], result:null
+  extra:[], results:{}
 };
+if(!S.results)S.results={};
+if(S.result){S.results[S.result.month]=S.result;delete S.result}   // 旧形式からの移行
+const curResult=()=>S.results[S.month]||null;
 let cur=0;
 function load(){try{return JSON.parse(localStorage.getItem(KEY))}catch(e){return null}}
 function save(remote){
@@ -83,7 +96,7 @@ async function doAuth(mode){
     const d=await r.json();
     if(!r.ok){const c=(d.error&&d.error.message||'').split(' ')[0];throw new Error(AUTH_ERR[c]||c||r.status)}
     S.sync=Object.assign({},S.sync,{apiKey:key});
-    setAuth(d);save(true);syncMsg='ログインしました';render();pull();
+    setAuth(d);save(true);syncMsg='ログインしました';enableNotify();render();pull();
   }catch(e){alert('ログイン失敗: '+e.message)}
 }
 function logout(){S.auth=null;syncMsg='';save(true);render()}
@@ -101,7 +114,7 @@ async function url(){
   const u=syncUrl();if(!u)return null;
   return S.sync.apiKey?u+'?auth='+encodeURIComponent(await token()):u;
 }
-function shared(){const {month,members,positions,extra,leaves,result,updatedAt}=S;return{month,members,positions,extra,leaves:leaves||[],result:result||null,updatedAt}}
+function shared(){const {members,positions,extra,leaves,results,updatedAt}=S;return{members,positions,extra,leaves:leaves||[],results:results||{},updatedAt}}
 // Firebaseは空配列を保存しないため、受信時に形を整える
 const toArr=x=>x?Object.values(x):[];
 function fixResult(R){
@@ -127,8 +140,13 @@ async function pull(){
     const d=await r.json();
     if(!d){push();return}                       // 新しい共有コード: 自分のデータを登録
     if((d.updatedAt||0)>(S.updatedAt||0)){
-      S.month=d.month;S.members=d.members||[];S.positions=d.positions||[];S.extra=toArr(d.extra);S.leaves=toArr(d.leaves);S.members=toArr(d.members);S.positions=toArr(d.positions);S.result=fixResult(d.result);S.updatedAt=d.updatedAt;
+      const old=S.results||{},had=(S.updatedAt||0)>0,res={};
+      S.extra=toArr(d.extra);S.leaves=toArr(d.leaves);S.members=toArr(d.members);S.positions=toArr(d.positions);
+      Object.keys(d.results||{}).forEach(k=>res[k]=fixResult(d.results[k]));
+      if(d.result){const f=fixResult(d.result);if(f&&!res[f.month])res[f.month]=f}   // 旧形式のデータ
+      S.results=res;S.updatedAt=d.updatedAt;
       save(true);syncMsg='最新を受信 '+new Date().toLocaleTimeString();
+      if(had)Object.keys(res).forEach(k=>{if(!old[k]||old[k].at!==res[k].at)notify('勤怠表が作り直されました',k.replace('-','年')+'月の勤怠表が更新されました')});
       const a=document.activeElement;if(!a||!/INPUT|SELECT/.test(a.tagName))render();
     }else if((d.updatedAt||0)<(S.updatedAt||0))push();
     else syncMsg='同期中 '+new Date().toLocaleTimeString();
@@ -136,7 +154,40 @@ async function pull(){
   showSync();
 }
 function showSync(){const el=document.getElementById('syncmsg');if(el)el.textContent=syncMsg}
+
+// ---------- 通知・トースト ----------
+let toastTimer=null,LN=null;
+function toast(t){const el=document.getElementById('toast');el.textContent=t;el.style.display='block';clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.style.display='none',3000)}
+function nativeLN(){
+  if(LN)return LN;
+  if(window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform())LN=Capacitor.registerPlugin('LocalNotifications');
+  return LN;
+}
+async function enableNotify(){
+  try{const ln=nativeLN();
+    if(ln)await ln.requestPermissions();
+    else if('Notification' in window&&Notification.permission==='default')await Notification.requestPermission();
+  }catch(e){}
+}
+async function notify(title,body){
+  toast(body);
+  try{const ln=nativeLN();
+    if(ln)await ln.schedule({notifications:[{id:Date.now()%2000000000,title,body}]});
+    else if('Notification' in window&&Notification.permission==='granted'){
+      const reg=navigator.serviceWorker&&await navigator.serviceWorker.getRegistration();
+      if(reg)reg.showNotification(title,{body,icon:'icon.svg'});else new Notification(title,{body});
+    }
+  }catch(e){}
+}
+async function refresh(){
+  toast('更新中…');
+  await pull();await checkUpdate();
+  toast(S.sync&&syncUrl()?(syncMsg||'更新しました'):'更新しました（共有は未設定です）');
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)pull()});
+
 function saveSync(){
+  enableNotify();
   S.sync={url:document.getElementById('fburl').value,code:document.getElementById('fbcode').value,apiKey:document.getElementById('fbkey').value.trim()};
   save(true);render();pull();
 }
@@ -217,10 +268,12 @@ function generate(){
   const {members,positions}=S;
   const days=monthDays().filter(d=>!d.off);
   if(!members.length||!positions.length||!days.length){alert('メンバー・ポジション・出勤日を確認してください');return}
+  const [yy,mm]=S.month.split('-').map(Number);
+  if(curResult()&&!confirm(`${yy}年${mm}月の勤怠表を作り直しますか？\n現在の内容は破棄されます。`))return;
   let best=null;
   for(let i=0;i<300;i++){const r=simulate(days,members,positions,S.leaves||[]);if(!best||r.score<best.score)best=r}
-  S.result={month:S.month,members:[...members],positions:positions.map(p=>({...p})),rows:best.rows,consec:best.consec};
-  save();tab(1);
+  S.results[S.month]={month:S.month,at:Date.now(),members:[...members],positions:positions.map(p=>({...p})),rows:best.rows,consec:best.consec};
+  save();tab(1);toast(`${yy}年${mm}月の勤怠表を作成しました`);
 }
 
 // ---------- 画面 ----------
@@ -228,7 +281,7 @@ function tab(i){cur=i;t0.className=i?'' :'on';t1.className=i?'on':'';render()}
 function render(){app.innerHTML=updBanner()+(cur?viewTable():viewSettings());}
 
 // ---------- アップデート確認（GitHub Releases） ----------
-const APP_VERSION='1.0.3',REPO='machiko355-maker/kintai-app';
+const APP_VERSION='1.1.0',REPO='machiko355-maker/kintai-app';
 let upd=null;
 const verNum=v=>v.replace(/^v/,'').split('.').map(Number);
 function newer(a,b){const x=verNum(a),y=verNum(b);for(let i=0;i<3;i++){if((x[i]||0)!==(y[i]||0))return(x[i]||0)>(y[i]||0)}return false}
@@ -250,7 +303,7 @@ const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',
 function viewSettings(){
   const need=S.positions.reduce((a,p)=>a+p.count,0);
   return `
-  <div class="card"><h2>対象月</h2><input type="month" value="${S.month}" onchange="S.month=this.value;save();render()"></div>
+  <div class="card"><h2>対象月</h2><div class="row"><input type="month" class="grow" value="${S.month}" onchange="if(this.value){S.month=this.value;save(true);render()}"><button class="b g" onclick="refresh()">更新</button></div></div>
   <div class="card"><h2>メンバー（${S.members.length}人）</h2>
     <div class="row"><input id="nm" class="grow" placeholder="名前"><button class="b" onclick="addMember()">追加</button></div>
     <div class="chips">${S.members.map((m,i)=>`<span class="chip">${esc(m)}<button class="x" onclick="delMember(${i})">×</button></span>`).join('')}</div>
@@ -294,9 +347,15 @@ function addLeave(){
 }
 function addExtra(){if(ed.value&&!S.extra.includes(ed.value)){S.extra.push(ed.value);save();render()}}
 
+function shiftMonth(d){
+  const [y,m]=S.month.split('-').map(Number),dt=new Date(y,m-1+d,1);
+  S.month=dt.getFullYear()+'-'+pad(dt.getMonth()+1);save(true);render();
+}
 function viewTable(){
-  const R=S.result;
-  if(!R)return '<div class="card">まだ作成されていません。「設定」から作成してください。</div>';
+  const R=curResult();
+  const [ny,nm_]=S.month.split('-').map(Number);
+  const nav=`<div class="card mnav"><button class="b g" onclick="shiftMonth(-1)">◀ 前月</button><b>${ny}年${nm_}月</b><button class="b g" onclick="shiftMonth(1)">翌月 ▶</button></div>`;
+  if(!R)return nav+`<div class="card"><p>この月の勤怠表はまだありません。</p><div class="row"><button class="b" onclick="generate()">この月を作成</button><button class="b g" onclick="refresh()">更新</button></div></div>`;
   const info={};monthDays().forEach(d=>info[d.k]=d);
   const [y,m]=R.month.split('-').map(Number);
   const hol=holidays(y);
@@ -320,17 +379,17 @@ function viewTable(){
     R.rows.forEach(r=>{r.asg.forEach((a,i)=>{if(a.includes(mm)){pc[i]++;tot++}});if(r.lv.includes(mm))lv++});return{pc,tot,lv}};
   const sum='<tr><th>名前</th><th>出勤</th>'+R.positions.map(p=>`<th>${esc(p.name)}</th>`).join('')+'<th>有休</th></tr>'+
     R.members.map(mm=>{const s=stat(mm);return `<tr><td>${esc(mm)}</td><td>${s.tot}</td>${s.pc.map(c=>`<td>${c}</td>`).join('')}<td>${s.lv}</td></tr>`}).join('');
-  return `
-  <div class="card"><h2>${y}年${m}月</h2>
-    <p class="hint">連日勤務：${R.consec}回${R.consec?'（人数の都合で発生）':'（なし）'}</p>
-    <div class="row"><button class="b" onclick="generate()">作り直す</button><button class="b g" onclick="copyText()">コピー</button><button class="b g" onclick="shareCsv()">CSV</button></div>
+  return nav+`
+  <div class="card">
+    <p class="hint" style="margin:0 0 8px">連日勤務：${R.consec}回${R.consec?'（人数の都合で発生）':'（なし）'}</p>
+    <div class="row" style="margin:0"><button class="b g" onclick="refresh()">更新</button><button class="b" onclick="generate()">作り直す</button><button class="b g" onclick="copyText()">コピー</button><button class="b g" onclick="shareCsv()">CSV</button></div>
   </div>
-  <div class="wrap card"><table>${head}${body}</table></div>
+  <div class="wrap card tbl"><table>${head}${body}</table></div>
   <div class="wrap card"><h2>集計</h2><table>${sum}</table></div>`;
 }
 
 function toRows(){
-  const R=S.result,[y,m]=R.month.split('-').map(Number);
+  const R=curResult(),[y,m]=R.month.split('-').map(Number);
   const out=[['日付',...R.positions.map(p=>p.name),'休み']];
   R.rows.forEach(r=>{const d=new Date(r.k+'T00:00:00');out.push([`${m}/${d.getDate()}(${WD[d.getDay()]})`,...r.asg.map(a=>a.join('・')),r.rest.concat(r.lv.map(x=>x+'(有休)')).join('・')])});
   return out;
@@ -341,14 +400,14 @@ function copyText(){
 }
 async function shareCsv(){
   const csv='﻿'+toRows().map(r=>r.map(c=>'"'+c.replace(/"/g,'""')+'"').join(',')).join('\r\n');
-  const name=`勤怠表_${S.result.month}.csv`;
+  const name=`勤怠表_${S.month}.csv`;
   const file=new File([csv],name,{type:'text/csv'});
   try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:name});return}}catch(e){}
   const a=document.createElement('a');a.href=URL.createObjectURL(file);a.download=name;a.click();
 }
 
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
-tab(S.result?1:0);pull();checkUpdate();
+tab(curResult()?1:0);pull();checkUpdate();if(S.sync)enableNotify();
 </script>
 </body>
 </html>
